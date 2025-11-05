@@ -1,134 +1,183 @@
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.image.BufferedImage;
-import java.io.*;
-import java.net.*;
-import javax.imageio.ImageIO;
-import javax.swing.*;
+import java.awt.*;	// robot class
+import java.awt.event.*;	
+import javax.swing.*;	//joptionpane
+import java.net.*;	//socket
+import java.io.*;	//stream
+import java.awt.image.*;	// not used
+import javax.imageio.*;		//
 import java.util.Scanner;
 
-public class ClientMainUDPWithControl {
-    private String serverIp;
-    private int udpPort;
-    private int controlPort = 6000;
-    private Robot robot;
-    private Rectangle screenRect;
-    private Socket controlSocket;
 
-    public static void main(String[] args) throws Exception {
-        String ip = JOptionPane.showInputDialog("Enter server IP:");
-        String udpPortStr = JOptionPane.showInputDialog("Enter server UDP port:");
-        int udpPort = Integer.parseInt(udpPortStr);
 
-        new ClientMainUDPWithControl(ip, udpPort).startClient();
+
+
+// main class of client
+public class ClientMain {
+
+    Socket socket = null;
+
+    public static void main(String[] args){
+		
+		//joptionpane is small window with a label
+		//showInoputDialog accepts user input and returns as string
+        String ip = JOptionPane.showInputDialog("Please enter server IP");
+        String port = JOptionPane.showInputDialog("Please enter server port");
+        new ClientMain().initialize(ip, Integer.parseInt(port));
     }
 
-    public ClientMainUDPWithControl(String ip, int udpPort) throws AWTException {
-        this.serverIp = ip;
-        this.udpPort = udpPort;
-        this.robot = new Robot();
-        Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
-        this.screenRect = new Rectangle(screenSize);
-    }
+    public void initialize(String ip, int port ){
 
-    public void startClient() throws IOException {
-        // Connect to server TCP control port (for receiving control commands)
-        controlSocket = new Socket(serverIp, controlPort);
-        new Thread(new ControlCommandListener(controlSocket, robot)).start();
+        Robot robot ; //Used to capture the screen
+        Rectangle rectangle; //Used to represent screen dimensions
 
-        // Start sending screenshots over UDP continuously
-        DatagramSocket udpSocket = new DatagramSocket();
-        InetAddress serverAddress = InetAddress.getByName(serverIp);
+        try {
+            System.out.println("Connecting to server ..");
+            socket = new Socket(ip, port);
+            System.out.println("Connection done.");
 
-        while (true) {
-            BufferedImage screenshot = robot.createScreenCapture(screenRect);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            ImageIO.write(screenshot, "jpg", baos);
-            byte[] imageBytes = baos.toByteArray();
+          
+            //Get screen dimensions
+			// dimension n rectangel class is present in awt package
+            Dimension dim = Toolkit.getDefaultToolkit().getScreenSize();
+            rectangle = new Rectangle(dim);
 
-            int chunkSize = 32000;
-            int totalChunks = (int) Math.ceil(imageBytes.length / (double) chunkSize);
-            int imageId = (int) (System.currentTimeMillis() & 0xfffffff);
+            //Prepare Robot object
+            robot = new Robot();
 
-            for (int i = 0; i < totalChunks; i++) {
-                int start = i * chunkSize;
-                int length = Math.min(chunkSize, imageBytes.length - start);
-                byte[] chunkData = new byte[length];
-                System.arraycopy(imageBytes, start, chunkData, 0, length);
-
-                ByteArrayOutputStream baosPacket = new ByteArrayOutputStream();
-                DataOutputStream dos = new DataOutputStream(baosPacket);
-                dos.writeInt(imageId);
-                dos.writeInt(totalChunks);
-                dos.writeInt(i);
-                dos.writeInt(length);
-                dos.write(chunkData);
-                byte[] packetData = baosPacket.toByteArray();
-
-                DatagramPacket packet = new DatagramPacket(packetData, packetData.length, serverAddress, udpPort);
-                udpSocket.send(packet);
-            }
-
-            try {
-                Thread.sleep(100); // adjust for smooth screen updates and bandwidth
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
-    }
-
-    // Thread class to receive control commands and execute using Robot
-    class ControlCommandListener implements Runnable {
-        private Socket socket;
-        private Robot robot;
-
-        public ControlCommandListener(Socket socket, Robot robot) {
-            this.socket = socket;
-            this.robot = robot;
+            
+            //ScreenSender sends screenshots of the client screen
+            new ScreenSender(socket,robot,rectangle);
+			
+			
+            //ServerCmdExecution recieves server commands and execute them
+            new ServerCmdExecution(socket,robot);
         }
 
-        public void run() {
+		catch (Exception ex) {
+            ///
+        } 
+    }
+}
+ 
+
+
+
+
+
+
+//send sshots
+class ScreenSender extends Thread {
+
+    Socket socket ; 
+    Robot robot; // Used to capture screen
+    Rectangle rectangle; //Used to represent screen dimensions
+    boolean continueLoop = true; //Used to exit the program
+    
+    public ScreenSender(Socket socket, Robot robot,Rectangle rect) {
+        this.socket = socket;
+        this.robot = robot;
+        rectangle = rect;
+        start();	//to start the thread
+    }
+
+	// overriding run() of Thread class
+    public void run()
+	{
+        ObjectOutputStream oos = null ; //Used to write an object to the streem
+
+
+        try{
+            //Prepare ObjectOutputStream
+            oos = new ObjectOutputStream(socket.getOutputStream());
+            /*
+             * Send screen size to the server in order to calculate correct mouse
+             * location on the server's panel
+             */
+            oos.writeObject(rectangle);
+        }catch(Exception ex){
+            ////
+        }
+
+       while(continueLoop){
+            //Capture screen
+            BufferedImage image = robot.createScreenCapture(rectangle);
+           
+		   // we acnnot send BufferedImage in stream
+		   // so we converted it to imageicon
+		   
+            ImageIcon imageIcon = new ImageIcon(image);
+
+            //Send captured screen to the server
             try {
-                Scanner scanner = new Scanner(socket.getInputStream());
-                Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
-                int clientScreenWidth = screenSize.width;
-                int clientScreenHeight = screenSize.height;
-                while (true) {
-                    if (!scanner.hasNext()) continue;
-                    String token = scanner.next();
-                    int command = Integer.parseInt(token);
-                    double sensitivity = 5; 
-                    switch (command) {
-                        case -1: // mouse press
-                            int pressBtn = scanner.nextInt();
-                            robot.mousePress(pressBtn);
-                            break;
-                        case -2: // mouse release
-                            int releaseBtn = scanner.nextInt();
-                            robot.mouseRelease(releaseBtn);
-                            break;
-                        case -3: // key press
-                            int keyPress = scanner.nextInt();
-                            robot.keyPress(keyPress);
-                            break;
-                        case -4: // key release
-                            int keyRelease = scanner.nextInt();
-                            robot.keyRelease(keyRelease);
-                            break;
-                        case -5: // mouse move (relative)
-                            double relX = scanner.nextDouble();
-                            double relY = scanner.nextDouble();
-                            int absX = (int) (relX * clientScreenWidth * sensitivity + (1 - sensitivity) * MouseInfo.getPointerInfo().getLocation().x);
-                            int absY = (int) (relY * clientScreenHeight * sensitivity + (1 - sensitivity) * MouseInfo.getPointerInfo().getLocation().y);
-                            robot.mouseMove(absX, absY);
-                            break;
-                        default:
-                            break;
-                    }
+                System.out.println("before sending image");
+                oos.writeObject(imageIcon);
+                oos.reset(); //Clear ObjectOutputStream cache
+                System.out.println("New screenshot sent");
+            } 
+			catch (Exception ex) {
+               ////
+            }
+
+            //wait for 100ms to reduce network traffic
+            try{
+                Thread.sleep(100);
+            }
+			catch(Exception e){
+                /////
+            }
+        }
+
+    }
+
+}
+
+
+
+class ServerCmdExecution extends Thread {
+
+    Socket socket = null;
+    Robot robot = null;
+    boolean continueLoop = true;
+
+    public ServerCmdExecution(Socket socket, Robot robot) {
+        this.socket = socket;
+        this.robot = robot;
+        start(); //Start the thread and hence calling run method
+    }
+
+    public void run(){
+        Scanner scanner = null;
+        try {
+            //prepare Scanner object
+            System.out.println("Preparing InputStream");
+            scanner = new Scanner(socket.getInputStream());
+
+            while(continueLoop){
+                //recieve commands and respond accordingly
+                System.out.println("Waiting for command");
+                int command = scanner.nextInt();
+                System.out.println("New command: " + command);
+                switch(command){
+                    case -1:
+                        robot.mousePress(scanner.nextInt());
+                    break;
+                    case -2:
+                        robot.mouseRelease(scanner.nextInt());
+                    break;
+                    case -3:
+                        robot.keyPress(scanner.nextInt());
+                    break;
+                    case -4:
+                        robot.keyRelease(scanner.nextInt());
+                    break;
+                    case -5:
+                        robot.mouseMove(scanner.nextInt(), scanner.nextInt());
+                    break;
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
             }
+        } catch (Exception e) {
+            ///
         }
     }
+
 }
